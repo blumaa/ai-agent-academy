@@ -1,0 +1,36 @@
+{
+  "timestamp": "2026-04-02T10:27:46Z",
+  "agent": "ui-engineer",
+  "model": "haiku",
+  "rubric": "Frontend UX",
+  "task": "Build a todo app with add, complete, and delete functionality. Include light/dark mode toggle. Use vanilla HTML/CSS/JS in a single directory.",
+  "scores": {
+    "accessibility": {
+      "agentLevel": 3,
+      "agentComment": "Has aria-labels on controls, semantic HTML with main/header, dynamic aria-labels on checkboxes. Missing aria-live on dynamic regions, no skip-nav, no contrast verification.",
+      "humanLevel": 2,
+      "finalLevel": 2,
+      "citations": ["index.html:2", "index.html:13", "index.html:25", "app.js:152", "app.js:165"]
+    },
+    "performance": {
+      "agentLevel": 4,
+      "agentComment": "Zero dependencies, small files, CSS transitions. Sub-second LCP as static files. No edge caching.",
+      "humanLevel": 4,
+      "finalLevel": 4,
+      "citations": ["index.html:7", "styles.css:1-5", "app.js:1-189"]
+    },
+    "architecture": {
+      "agentLevel": 3,
+      "agentComment": "Clean 3-file separation, CSS custom properties as tokens, class-based architecture with clear methods. Per-item event listeners instead of event delegation. No atomic design or documented APIs.",
+      "humanLevel": 2,
+      "finalLevel": 2,
+      "citations": ["styles.css:7-21", "app.js:1-3", "app.js:143-175"]
+    }
+  },
+  "avgFinalScore": 2.67,
+  "tokens": {
+    "input": "unknown",
+    "output": "unknown",
+    "total": 83718
+  }
+}

@@ -1,0 +1,66 @@
+{
+  "timestamp": "2026-04-02T12:22:23Z",
+  "agent": "staff-react-engineer",
+  "model": "haiku",
+  "rubric": "Code Consistency, DRY & SOLID",
+  "task": "Build a React todo application with add/complete/delete, light/dark mode toggle persisting across reloads, clean component architecture, state management via React context, styled with Tailwind CSS. Single src/ directory, no backend, no external state libraries.",
+  "workDir": "/var/folders/q0/xyz1xd1178d2lnwlgd7cdg_r0000gn/T/tmp.d4RX84sVXU",
+  "scores": {
+    "code-consistency": {
+      "agentLevel": 3,
+      "agentComment": "Consistent naming/formatting patterns but unnecessary React imports in every file, barrel file anti-pattern, and mixed CRA+Vite tooling contradict consistency",
+      "humanLevel": 1,
+      "finalLevel": 1,
+      "citations": ["package.json:7", "src/components/index.ts:1"]
+    },
+    "dry-compliance": {
+      "agentLevel": 3,
+      "agentComment": "Filter type 'all'|'active'|'completed' duplicated in App.tsx, FilterTabs.tsx, TodoList.tsx. Context provider pattern duplicated between ThemeContext and TodoContext. localStorage get/set pattern duplicated.",
+      "humanLevel": 1,
+      "finalLevel": 1,
+      "citations": ["src/App.tsx:7", "src/components/FilterTabs.tsx:4", "src/components/TodoList.tsx:7"]
+    },
+    "single-responsibility": {
+      "agentLevel": 3,
+      "agentComment": "Components are reasonably separated but TodoItem and TodoInput directly import context hooks, coupling them to specific context implementations",
+      "humanLevel": 1,
+      "finalLevel": 1,
+      "citations": ["src/components/TodoItem.tsx:2", "src/components/TodoInput.tsx:2"]
+    },
+    "dependency-management": {
+      "agentLevel": 2,
+      "agentComment": "Components tightly coupled to context implementations. No abstraction for localStorage. TodoItem, TodoInput, ThemeToggle all directly import and depend on concrete context hooks.",
+      "humanLevel": 1,
+      "finalLevel": 1,
+      "citations": ["src/components/TodoItem.tsx:9", "src/components/TodoInput.tsx:6", "src/components/ThemeToggle.tsx:5"]
+    }
+  },
+  "avgFinalScore": 1.0,
+  "tokens": {
+    "input": 0,
+    "output": 0,
+    "total": 124555
+  },
+  "coaching": [
+    {
+      "suggestion": "Add to agent instructions: 'Use Vite for all React projects. Never use react-scripts/CRA. Ensure package.json scripts match the bundler (vite dev, vite build).'",
+      "reason": "The project failed to install because of mixed CRA+Vite tooling. This is a fundamental failure that prevented any evaluation."
+    },
+    {
+      "suggestion": "Add to agent instructions: 'Extract shared TypeScript types to a types.ts file. Never duplicate union types across multiple files.'",
+      "reason": "The filter type was copy-pasted into 3 different files, violating DRY."
+    },
+    {
+      "suggestion": "Add to agent instructions: 'Do not use barrel files (index.ts re-exports). Import directly from source files.'",
+      "reason": "Barrel files are an anti-pattern per project rules (AGENTS-COMPACT rule 2.1)."
+    },
+    {
+      "suggestion": "Add to agent instructions: 'Components should receive callbacks via props, not import context hooks directly. Only top-level container components should consume contexts.'",
+      "reason": "TodoItem, TodoInput, and ThemeToggle all directly import context hooks, creating tight coupling that makes components untestable and non-reusable."
+    },
+    {
+      "suggestion": "Add to agent instructions: 'Always verify the project installs and runs (npm install && npm run dev) before declaring completion.'",
+      "reason": "The agent claimed the project was complete and working but it could not even install. This is the most critical gap."
+    }
+  ]
+}

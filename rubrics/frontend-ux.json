@@ -1,0 +1,38 @@
+{
+  "title": "Frontend UX",
+  "criteria": [
+    {
+      "key": "accessibility",
+      "name": "Accessibility",
+      "levels": [
+        "No ARIA labels, no keyboard nav, fails WCAG",
+        "Some alt text, inconsistent focus management",
+        "Passes WCAG AA, keyboard navigable",
+        "Full WCAG AA, screen reader tested",
+        "WCAG AAA, a11y tests in CI"
+      ]
+    },
+    {
+      "key": "performance",
+      "name": "Performance",
+      "levels": [
+        "LCP > 6s, no code splitting",
+        "LCP 4-6s, minimal optimization",
+        "LCP 2.5-4s, basic lazy loading",
+        "LCP < 2.5s, Core Web Vitals green",
+        "Sub-second LCP, edge caching"
+      ]
+    },
+    {
+      "key": "architecture",
+      "name": "Architecture",
+      "levels": [
+        "God components, no separation of concerns",
+        "Some breakdown, unclear boundaries",
+        "Clear hierarchy, hooks for logic",
+        "Atomic design, shared tokens",
+        "Composable, tested library, documented APIs"
+      ]
+    }
+  ]
+}
