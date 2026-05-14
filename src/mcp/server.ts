@@ -1,337 +1,223 @@
+import { readFileSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { drizzle } from "drizzle-orm/postgres-js";
-import postgres from "postgres";
-import { eq, and } from "drizzle-orm";
-import * as schema from "../db/schema.js";
+import { rubrics, getRubricBySlug } from "../lib/rubrics.js";
+import { evaluate } from "../lib/evaluator.js";
+import { formatReport } from "../lib/formatter.js";
+import { type LessonsStore, FileLessonsStore } from "../lib/lessons.js";
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ?? "postgresql://localhost:5432/aaanalytics";
+const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf-8"));
+const DEFAULT_DATA_DIR = new URL("../../data/lessons", import.meta.url).pathname;
 
-const client = postgres(DATABASE_URL);
-const db = drizzle(client, { schema });
+export function createServer(store?: LessonsStore): McpServer {
+  const lessonsStore = store ?? new FileLessonsStore(DEFAULT_DATA_DIR);
+  const server = new McpServer({
+    name: "ai-agent-academy",
+    version: pkg.version,
+  });
 
-const server = new McpServer({
-  name: "aaanalytics",
-  version: "0.1.0",
-});
-
-// ── Tool 1: get_rubric ──────────────────────────────────────
-
-server.registerTool(
-  "get_rubric",
-  {
-    title: "Get Rubric",
-    description:
-      "Load a rubric's criteria and performance levels for self-grading. Call this at the end of your task to see what you're being graded on.",
-    inputSchema: {
-      rubric_id: z
-        .string()
-        .optional()
-        .describe(
-          "Rubric ID. If omitted, returns the first available rubric.",
-        ),
-      include_descriptions: z
-        .boolean()
-        .optional()
-        .default(false)
-        .describe(
-          "Include cell descriptions for each level. Increases token count.",
-        ),
-    },
-    annotations: { readOnlyHint: true },
-  },
-  async ({ rubric_id, include_descriptions }) => {
-    let rubric;
-    if (rubric_id) {
-      [rubric] = await db
-        .select()
-        .from(schema.rubrics)
-        .where(eq(schema.rubrics.id, rubric_id));
-    } else {
-      [rubric] = await db.select().from(schema.rubrics).limit(1);
-    }
-
-    if (!rubric) {
-      return { content: [{ type: "text" as const, text: "No rubric found." }] };
-    }
-
-    const [version] = await db
-      .select()
-      .from(schema.rubricVersions)
-      .where(
-        and(
-          eq(schema.rubricVersions.rubricId, rubric.id),
-          eq(schema.rubricVersions.isCurrent, true),
-        ),
-      );
-
-    if (!version) {
-      return {
-        content: [
-          { type: "text" as const, text: "No current rubric version." },
-        ],
-      };
-    }
-
-    const criteria = await db
-      .select()
-      .from(schema.criteria)
-      .where(eq(schema.criteria.versionId, version.id))
-      .orderBy(schema.criteria.sortOrder);
-
-    const levels = await db
-      .select()
-      .from(schema.performanceLevels)
-      .where(eq(schema.performanceLevels.versionId, version.id))
-      .orderBy(schema.performanceLevels.sortOrder);
-
-    let cells: Array<{
-      criterionId: string;
-      levelId: string;
-      description: string | null;
-    }> = [];
-    if (include_descriptions) {
-      cells = await db.select().from(schema.rubricCells);
-    }
-
-    const output = {
-      rubric_id: rubric.id,
-      title: rubric.title,
-      delta_threshold: rubric.deltaThreshold,
-      levels: levels.map((l) => ({
-        id: l.id,
-        label: l.label,
-        value: l.numericValue,
-        passing: l.isPassing,
-      })),
-      criteria: criteria.map((c) => {
-        const entry: Record<string, unknown> = {
-          id: c.id,
-          key: c.stableKey,
-          name: c.name,
-          weight: c.weight,
-          grader: c.graderType,
-        };
-        if (include_descriptions) {
-          entry.levels = levels.map((l) => {
-            const cell = cells.find(
-              (cl) => cl.criterionId === c.id && cl.levelId === l.id,
-            );
-            return { level: l.label, description: cell?.description ?? "" };
-          });
-        }
-        return entry;
-      }),
+  server.tool("health_check", "Check if the AI Agent Academy MCP server is running", {}, () => {
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify({
+            status: "ok",
+            server: "ai-agent-academy",
+            version: pkg.version,
+            rubrics_loaded: rubrics.length,
+          }),
+        },
+      ],
     };
+  });
+
+  server.tool("list_rubrics", "List all available rubrics", {}, () => {
+    const summary = rubrics.map((r) => ({
+      slug: r.slug,
+      title: r.title,
+      criteria_count: r.criteria.length,
+      criteria_names: r.criteria.map((c) => c.label),
+    }));
 
     return {
-      content: [{ type: "text" as const, text: JSON.stringify(output) }],
+      content: [{ type: "text" as const, text: JSON.stringify({ rubrics: summary }, null, 2) }],
     };
-  },
-);
+  });
 
-// ── Tool 2: submit_self_score ───────────────────────────────
+  server.tool(
+    "get_rubric",
+    "Get full rubric details including criteria and level descriptions",
+    { slug: z.string().describe("Rubric slug (e.g. 'bugs-correctness')") },
+    ({ slug }) => {
+      const rubric = getRubricBySlug(slug);
+      if (!rubric) {
+        return {
+          isError: true,
+          content: [{ type: "text" as const, text: `Unknown rubric: "${slug}"` }],
+        };
+      }
 
-server.registerTool(
-  "submit_self_score",
-  {
-    title: "Submit Self-Score",
-    description:
-      "Submit your self-assessment scores after completing a task. Include evidence (file:line citations) for each criterion.",
-    inputSchema: {
-      rubric_id: z.string().describe("The rubric ID (from get_rubric)"),
-      app_id: z
-        .string()
-        .optional()
-        .describe(
-          "App/agent ID. If omitted, uses the first available app.",
-        ),
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(rubric, null, 2) }],
+      };
+    }
+  );
+
+  server.tool(
+    "run_specs",
+    "Evaluate work against a rubric. Returns a formatted scorecard and pass/fail verdict.",
+    {
+      rubric: z.string().describe("Rubric slug to evaluate against"),
       scores: z
         .array(
           z.object({
-            criterion_id: z
-              .string()
-              .describe("Criterion ID from get_rubric"),
-            level_id: z.string().describe("Performance level ID"),
-            comment: z
-              .string()
-              .describe("Brief explanation of why you chose this level"),
-            citations: z
-              .array(
-                z.object({
-                  file: z.string(),
-                  line: z.number(),
-                  note: z.string(),
-                }),
-              )
-              .optional()
-              .describe("File:line evidence supporting your score"),
-          }),
+            criterion: z.string().describe("Criterion label (exact match from rubric)"),
+            score: z.number().int().min(1).max(5).describe("Self-assessed score 1-5"),
+            reasoning: z.string().describe("Why this score, with file:line citations"),
+          })
         )
-        .describe("Your self-assessment for each criterion"),
-      agent_tokens: z
-        .number()
-        .optional()
-        .describe(
-          "Total tokens you consumed building the code (if known)",
-        ),
+        .describe("One entry per criterion in the rubric"),
     },
-  },
-  async ({ rubric_id, app_id, scores, agent_tokens }) => {
-    const [version] = await db
-      .select()
-      .from(schema.rubricVersions)
-      .where(
-        and(
-          eq(schema.rubricVersions.rubricId, rubric_id),
-          eq(schema.rubricVersions.isCurrent, true),
-        ),
-      );
+    ({ rubric: rubricSlug, scores }) => {
+      try {
+        const rubric = getRubricBySlug(rubricSlug);
+        if (!rubric) {
+          return {
+            isError: true,
+            content: [{ type: "text" as const, text: `Unknown rubric: "${rubricSlug}"` }],
+          };
+        }
 
-    if (!version) {
-      return {
-        content: [
-          { type: "text" as const, text: "Rubric version not found." },
-        ],
-      };
+        const result = evaluate(rubricSlug, scores);
+        const display = formatReport(rubric.title, result.results, result.failures);
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(
+                {
+                  display,
+                  passed: result.passed,
+                  failures: result.failures,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      } catch (err) {
+        return {
+          isError: true,
+          content: [
+            { type: "text" as const, text: err instanceof Error ? err.message : String(err) },
+          ],
+        };
+      }
     }
+  );
 
-    let app;
-    if (app_id) {
-      [app] = await db
-        .select()
-        .from(schema.apps)
-        .where(eq(schema.apps.id, app_id));
-    } else {
-      [app] = await db.select().from(schema.apps).limit(1);
-    }
-
-    if (!app) {
-      return { content: [{ type: "text" as const, text: "No app found." }] };
-    }
-
-    const [run] = await db
-      .insert(schema.evaluationRuns)
-      .values({
-        rubricVersionId: version.id,
-        appId: app.id,
-        status: "scoring",
-        agentTotalTokens: agent_tokens ?? null,
-      })
-      .returning();
-
-    for (const score of scores) {
-      await db.insert(schema.scores).values({
-        runId: run.id,
-        criterionId: score.criterion_id,
-        claudeLevelId: score.level_id,
-        claudeComment: score.comment,
-        citations: score.citations ?? [],
-      });
-    }
-
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify({
-            run_id: run.id,
-            status: "scoring",
-            message:
-              "Self-scores submitted. The human will now score independently via the web UI, then compare.",
-            view_url: `http://localhost:3000/runs/${run.id}`,
-          }),
-        },
-      ],
-    };
-  },
-);
-
-// ── Tool 3: get_feedback ────────────────────────────────────
-
-server.registerTool(
-  "get_feedback",
-  {
-    title: "Get Feedback",
-    description:
-      "Get finalized feedback from a completed evaluation run. Shows where your scores diverged from the human's and what to improve.",
-    inputSchema: {
-      run_id: z.string().describe("The evaluation run ID"),
+  server.tool(
+    "save_lesson",
+    "Save a lesson learned from an evaluation. Call after run_specs when the user approves committing the learning.",
+    {
+      project_id: z.string().describe("Project identifier (e.g. directory name)"),
+      rubric: z.string().describe("Rubric slug used for evaluation"),
+      passed: z.boolean().describe("Whether the quality gate passed"),
+      scores: z
+        .array(
+          z.object({
+            criterion: z.string(),
+            score: z.number().int().min(1).max(5),
+            reasoning: z.string(),
+          })
+        )
+        .describe("Scores from the evaluation"),
+      failures: z
+        .array(
+          z.object({
+            criterion: z.string(),
+            score: z.number(),
+            current_level: z.string(),
+            next_level: z.string(),
+          })
+        )
+        .describe("Failure details (empty array if passed)"),
+      lesson: z.string().describe("What the agent learned during this task"),
     },
-    annotations: { readOnlyHint: true },
-  },
-  async ({ run_id }) => {
-    const [run] = await db
-      .select()
-      .from(schema.evaluationRuns)
-      .where(eq(schema.evaluationRuns.id, run_id));
-
-    if (!run) {
-      return { content: [{ type: "text" as const, text: "Run not found." }] };
+    async ({ project_id, rubric, passed, scores, failures, lesson }) => {
+      try {
+        const entry = {
+          id: crypto.randomUUID(),
+          timestamp: new Date().toISOString(),
+          rubric,
+          passed,
+          scores,
+          failures,
+          lesson,
+        };
+        await lessonsStore.append(project_id, entry);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({ saved: true, entry_id: entry.id }),
+            },
+          ],
+        };
+      } catch (err) {
+        return {
+          isError: true,
+          content: [
+            { type: "text" as const, text: err instanceof Error ? err.message : String(err) },
+          ],
+        };
+      }
     }
+  );
 
-    const scores = await db
-      .select()
-      .from(schema.scores)
-      .where(eq(schema.scores.runId, run_id));
+  server.tool(
+    "get_lessons",
+    "Retrieve compiled lessons from past evaluations for a project. Call at the start of a task to learn from past mistakes.",
+    {
+      project_id: z.string().describe("Project identifier (e.g. directory name)"),
+    },
+    async ({ project_id }) => {
+      try {
+        const compiled = await lessonsStore.compile(project_id);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(compiled, null, 2),
+            },
+          ],
+        };
+      } catch (err) {
+        return {
+          isError: true,
+          content: [
+            { type: "text" as const, text: err instanceof Error ? err.message : String(err) },
+          ],
+        };
+      }
+    }
+  );
 
-    const criteria = await db
-      .select()
-      .from(schema.criteria)
-      .where(eq(schema.criteria.versionId, run.rubricVersionId));
-
-    const levels = await db
-      .select()
-      .from(schema.performanceLevels)
-      .where(eq(schema.performanceLevels.versionId, run.rubricVersionId));
-
-    const feedback = scores.map((score) => {
-      const criterion = criteria.find((c) => c.id === score.criterionId);
-      const claudeLevel = levels.find((l) => l.id === score.claudeLevelId);
-      const userLevel = levels.find((l) => l.id === score.userLevelId);
-      const finalLevel = levels.find((l) => l.id === score.finalLevelId);
-
-      const delta =
-        claudeLevel && userLevel
-          ? Math.abs(
-              (claudeLevel.numericValue ?? 0) -
-                (userLevel.numericValue ?? 0),
-            )
-          : null;
-
-      return {
-        criterion: criterion?.stableKey,
-        your_score: claudeLevel?.numericValue,
-        human_score: userLevel?.numericValue,
-        final_score: finalLevel?.numericValue,
-        delta,
-        human_comment: score.userComment,
-        your_comment: score.claudeComment,
-      };
-    });
-
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify({
-            run_id,
-            status: run.status,
-            feedback,
-          }),
-        },
-      ],
-    };
-  },
-);
-
-// ── Start server ────────────────────────────────────────────
+  return server;
+}
 
 async function main() {
+  const server = createServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
 
-main().catch(console.error);
+const isMainModule =
+  process.argv[1]?.endsWith("server.ts") || process.argv[1]?.endsWith("server.js");
+if (isMainModule) {
+  main().catch(console.error);
+}

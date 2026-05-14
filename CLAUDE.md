@@ -1,9 +1,10 @@
-@~/.claude/AGENTS-COMPACT.md
-@AGENTS.md
+@.claude/academy.md
 
-# AAAnalytics
+# AAAnalytics — AI Agent Academy
 
-Local developer tool for evaluating AI coding agents against customizable rubrics. Measures quality (rubric score) vs cost (tokens) to prove rubric-informed agents write better code more efficiently.
+MCP server providing quality gate evaluation for AI coding agents. Six rubrics covering bugs/correctness, performance, security, UX/accessibility, design systems, and DRY/SOLID/SSOT/KISS.
+
+Enable/disable via `/mcp` in Claude Code. When enabled, the agent self-evaluates against a rubric before completing tasks.
 
 ## Principles
 
@@ -11,40 +12,53 @@ Local developer tool for evaluating AI coding agents against customizable rubric
 - KISS: simplest solution that works
 - SOLID: single responsibility, open/closed, etc.
 - DRY: single source of truth
-- No mixed concerns: Tailwind only (no CSS files)
 
 ## Tech Stack
 
-- Next.js (App Router) + TypeScript
-- PostgreSQL (local) + Drizzle ORM
-- Tailwind CSS
-- Vitest + React Testing Library
-- Claude API (`@anthropic-ai/sdk`)
-- Shell execution: `execa`
+- TypeScript (pure Node.js, no framework)
+- MCP SDK (`@modelcontextprotocol/sdk`)
+- Zod (input validation)
+- Vitest (testing)
 
 ## Project Structure
 
 ```
 src/
-  app/           # Next.js App Router pages
-  db/            # Drizzle schema, migrations, connection
-  lib/           # Shared utilities, API clients
-  components/    # React components
+  mcp/server.ts        # MCP server — 6 tools
+  lib/rubrics.ts       # 6 rubric definitions (static data)
+  lib/evaluator.ts     # Score validation, pass/fail logic
+  lib/formatter.ts     # Terminal bar chart renderer
+  lib/lessons.ts       # Lesson storage and compilation
+data/lessons/           # Per-project lesson files (gitignored)
 ```
 
 ## Commands
 
-- `npm run dev` — start dev server
-- `npm run build` — production build
-- `npm run lint` — ESLint
-- `npm test` — Vitest
-- `npm run db:generate` — generate Drizzle migrations
-- `npm run db:migrate` — run migrations
-- `npm run db:seed` — seed database
+- `npm test` — run all tests
+- `npm run mcp` — start MCP server (stdio)
+- `npm run typecheck` — TypeScript check
 
-## Database
+## MCP Tools
 
-- Local PostgreSQL on port 5432
-- Database name: `aaanalytics`
-- Drizzle ORM for schema + migrations
-- Connection string in `.env.local`
+- `health_check` — verify server is running
+- `list_rubrics` — summary of all 6 rubrics
+- `get_rubric` — full rubric with criteria and level descriptions
+- `run_specs` — evaluate scores, format scorecard, pass/fail verdict
+- `save_lesson` — persist what the agent learned (user-approved)
+- `get_lessons` — retrieve compiled lessons from past evaluations
+
+## Cross-Project Setup
+
+Register in any project's `.claude/settings.local.json`:
+```json
+{
+  "mcpServers": {
+    "ai-agent-academy": {
+      "command": "npx",
+      "args": ["tsx", "src/mcp/server.ts"],
+      "cwd": "/path/to/AAAnalytics"
+    }
+  }
+}
+```
+Add `@/path/to/AAAnalytics/.claude/academy.md` to that project's CLAUDE.md.
